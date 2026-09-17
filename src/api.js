@@ -56,6 +56,29 @@ const recurrenceValues = new Set(["Weekly", "Monthly"]);
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const periodCache = new Map();
 const materializedAt = new Map();
+const FIREBASE_READY_TIMEOUT_MS = 10000;
+
+function waitForFirebaseReady(promise, message = "Não foi possível conectar ao Firebase. Verifique sua conexão e tente novamente.") {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new ApiError(message, 0, "network"));
+    }, FIREBASE_READY_TIMEOUT_MS);
+    Promise.resolve(promise).then(value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
 
 function mapFirebaseError(error) {
   if (error instanceof ApiError) return error;
@@ -104,8 +127,8 @@ function userResponse(user) {
 }
 
 async function requireUser() {
-  await authPersistenceReady;
-  if (typeof auth.authStateReady === "function") await auth.authStateReady();
+  await waitForFirebaseReady(authPersistenceReady);
+  if (typeof auth.authStateReady === "function") await waitForFirebaseReady(auth.authStateReady());
   if (!auth.currentUser) throw new ApiError("Sua sessão expirou. Entre novamente para continuar.", 401, "authentication");
   return auth.currentUser;
 }
@@ -296,13 +319,13 @@ const firebaseAuthApi = {
     const displayName = typeof credentials?.displayName === "string" ? credentials.displayName.trim() : "";
     if (displayName.length < 2 || displayName.length > 100) throw new ApiError("Nome inválido.", 400, "validation");
     validatePassword(credentials?.password);
-    await authPersistenceReady;
+    await waitForFirebaseReady(authPersistenceReady);
     const result = await createUserWithEmailAndPassword(auth, credentials.email.trim(), credentials.password);
     await updateProfile(result.user, { displayName });
     return userResponse(result.user);
   }),
   login: credentials => run(async () => {
-    await authPersistenceReady;
+    await waitForFirebaseReady(authPersistenceReady);
     const result = await signInWithEmailAndPassword(auth, credentials.email.trim(), credentials.password);
     invalidate(result.user.uid);
     materializedAt.delete(result.user.uid);
