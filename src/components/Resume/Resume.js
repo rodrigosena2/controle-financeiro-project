@@ -1,20 +1,12 @@
-import React from 'react'
-import ResumeItem from '../ResumeItem/ResumeItem'
-import * as C from './styles'
-import {
-  FaRegArrowAltCircleUp,
-  FaRegArrowAltCircleDown,
-  FaDollarSign,
-} from "react-icons/fa"
+import React from "react";
+import ResumeItem from "../ResumeItem/ResumeItem";
+import { FiArrowDownLeft, FiArrowUpRight, FiCreditCard } from "react-icons/fi";
+import * as C from "./styles";
 
-const Resume = ({ income, expense, total }) => {
-  return (
-    <C.Container>
-      <ResumeItem title="Entradas" Icon={FaRegArrowAltCircleUp } value={income} />
-      <ResumeItem title="Saídas" Icon={FaRegArrowAltCircleDown} value={expense} />
-      <ResumeItem title="Total" Icon={FaDollarSign} value={total} />
-    </C.Container>
-  )
+export default function Resume({ income, expense, total }) {
+  return <C.Container aria-label="Resumo financeiro">
+    <ResumeItem title="Saldo do período" id="total" Icon={FiCreditCard} value={total} primary hint="Receitas menos despesas" />
+    <ResumeItem title="Receitas" id="entradas" Icon={FiArrowDownLeft} value={income} hint="Entradas do período" />
+    <ResumeItem title="Despesas" id="saídas" Icon={FiArrowUpRight} value={expense} hint="Saídas do período" />
+  </C.Container>;
 }
-
-export default Resume

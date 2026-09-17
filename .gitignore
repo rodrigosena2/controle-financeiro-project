@@ -7,6 +7,7 @@
 
 # testing
 /coverage
+/artifacts/
 
 # production
 /build
@@ -21,3 +22,16 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# .NET
+**/bin/
+**/obj/
+.vs/
+.nuget-packages/
+.nuget-http-cache*/
+.dotnet-home/
+*.user
+
+# Local configuration and secrets
+appsettings.Local.json
+.env

@@ -1,70 +1,84 @@
-# Getting Started with Create React App
+# Controle Financeiro
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Aplicação full stack para registrar entradas e saídas, acompanhar totais e persistir
+os lançamentos por conta no SQL Server.
 
-## Available Scripts
+O frontend usa cadastro, login e logout com ASP.NET Core Identity. As transações vêm do SQL Server e pertencem exclusivamente à conta autenticada. Consulte [Autenticação e execução HTTPS](docs/AUTHENTICATION.md) para iniciar o sistema completo.
 
-In the project directory, you can run:
+## Funcionalidades atuais
 
-### `npm start`
+- Cadastro de entradas e saídas com descrição e valor.
+- Cálculo do total de entradas, saídas e saldo.
+- Edição e exclusão de lançamentos.
+- Categorias compatíveis com receitas/despesas, filtros combinados e busca.
+- Resumo mensal ou personalizado calculado pela API, ordenação e paginação.
+- Transações recorrentes semanais e mensais, com encerramento da série.
+- Persistência no SQL Server por usuário; cookie HttpOnly e proteção CSRF.
+- Layout mobile-first, acessível e adaptável para celular, tablet e desktop.
+- Feedback visual consistente, validação associada aos campos e confirmação de exclusão.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Tecnologias atuais
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- React 18
+- Create React App / react-scripts 5
+- styled-components 5
+- react-icons 4
+- Jest e Testing Library
+- ASP.NET Core / .NET 10 LTS
+- Entity Framework Core 10
+- SQL Server
+- Swagger/OpenAPI
+- xUnit
 
-### `npm test`
+O projeto usa `npm` como gerenciador de pacotes e mantém somente `package-lock.json` para instalações reproduzíveis.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Executar
 
-### `npm run build`
+```powershell
+npm.cmd install
+npm.cmd run build
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Para usar o sistema completo, configure o banco e o certificado HTTPS conforme [AUTHENTICATION.md](docs/AUTHENTICATION.md), depois execute `dotnet run --project backend/ControleFinanceiro.Api` e abra `https://localhost:7091`.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Validação
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+```powershell
+npm.cmd test -- --watchAll=false
+npm.cmd run lint
+npm.cmd run build
+npm.cmd run test:responsive
+```
 
-### `npm run eject`
+### Backend
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+```powershell
+dotnet tool restore
+dotnet ef database update --project backend/ControleFinanceiro.Api --startup-project backend/ControleFinanceiro.Api
+dotnet build ControleFinanceiro.slnx
+dotnet test ControleFinanceiro.slnx
+dotnet run --project backend/ControleFinanceiro.Api
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Com a API em execução, a interface compilada fica em `https://localhost:7091` e o Swagger em `https://localhost:7091/swagger`. Execute `npm.cmd run build` antes e confie no certificado de desenvolvimento conforme a documentação de autenticação.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Documentação
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+- [Estado atual e diagnóstico](docs/CURRENT_STATE.md)
+- [Arquitetura atual e planejada](docs/ARCHITECTURE.md)
+- [Preparação do ambiente](docs/SETUP.md)
+- [Resultado das validações](docs/VALIDATION.md)
+- [Backend e banco de dados](docs/BACKEND.md)
+- [Autenticação, segurança e execução completa](docs/AUTHENTICATION.md)
+- [Integração React, persistência e rede local](docs/FRONTEND_INTEGRATION.md)
+- [Regressão da integração em 16/09/2026](docs/INTEGRATION_VALIDATION.md)
+- [Auditoria e melhoria de UX/UI](docs/UX_UI.md)
+- [Categorias, filtros, resumo, paginação e recorrência](docs/FINANCIAL_FEATURES.md)
+- [Validação desta etapa financeira](docs/FINANCIAL_VALIDATION.md)
 
-## Learn More
+## Estado atual
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+O SQL Server continua sendo a fonte oficial. Categorias, filtros, resumo por período,
+paginação e recorrência simples estão documentados separadamente. A importação do
+legado permanece desativada; recuperação de senha por email, teste físico em celular
+e deploy continuam como etapas futuras.

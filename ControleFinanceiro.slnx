@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="backend/ControleFinanceiro.Api/ControleFinanceiro.Api.csproj" />
+  <Project Path="backend/ControleFinanceiro.Tests/ControleFinanceiro.Tests.csproj" />
+</Solution>
