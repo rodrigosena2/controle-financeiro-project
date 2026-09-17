@@ -17,7 +17,7 @@ import {
   updateDoc,
   where,
   writeBatch
-} from "firebase/firestore";
+} from "firebase/firestore/lite";
 import { auth, authPersistenceReady, db } from "./firebaseClient";
 
 export class ApiError extends Error {
@@ -57,15 +57,16 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const periodCache = new Map();
 const materializedAt = new Map();
 const FIREBASE_READY_TIMEOUT_MS = 10000;
+const FIREBASE_OPERATION_TIMEOUT_MS = 15000;
 
-function waitForFirebaseReady(promise, message = "Não foi possível conectar ao Firebase. Verifique sua conexão e tente novamente.") {
+function waitForFirebaseReady(promise, message = "Não foi possível conectar ao Firebase. Verifique sua conexão e tente novamente.", timeout = FIREBASE_READY_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       reject(new ApiError(message, 0, "network"));
-    }, FIREBASE_READY_TIMEOUT_MS);
+    }, timeout);
     Promise.resolve(promise).then(value => {
       if (settled) return;
       settled = true;
@@ -112,7 +113,11 @@ function mapFirebaseError(error) {
 
 async function run(operation) {
   try {
-    return await operation();
+    return await waitForFirebaseReady(
+      operation(),
+      "O Firebase não confirmou a operação. Verifique a conexão e tente novamente.",
+      FIREBASE_OPERATION_TIMEOUT_MS
+    );
   } catch (error) {
     throw mapFirebaseError(error);
   }
@@ -386,6 +391,7 @@ const firebaseTransactionsApi = {
     const batch = writeBatch(db);
     let transactionRef;
     let recurrenceRef = null;
+    let transactionValue;
     if (input.recurrenceFrequency) {
       recurrenceRef = doc(collection(db, "users", user.uid, "recurrences"));
       transactionRef = doc(transactionCollection, `${recurrenceRef.id}_${input.date.replaceAll("-", "")}`);
@@ -405,15 +411,17 @@ const firebaseTransactionsApi = {
     } else {
       transactionRef = doc(transactionCollection);
     }
-    batch.set(transactionRef, transactionDocument(user.uid, input, recurrenceRef?.id || null));
+    transactionValue = transactionDocument(user.uid, input, recurrenceRef?.id || null);
+    batch.set(transactionRef, transactionValue);
     await batch.commit();
     invalidate(user.uid);
-    materializedAt.delete(user.uid);
-    const snapshot = await getDoc(transactionRef);
+    if (recurrenceRef) materializedAt.delete(user.uid);
     const recurrenceMap = recurrenceRef ? new Map([[recurrenceRef.id, {
       active: true, nextOccurrenceDate: addOccurrence(input.date, input.recurrenceFrequency)
     }]]) : new Map();
-    return transactionResponse(snapshot, recurrenceMap);
+    // The batch commit already confirms the write. Avoid an extra read here;
+    // the background refresh will reconcile server timestamps and pagination.
+    return transactionResponse({ id: transactionRef.id, data: () => transactionValue }, recurrenceMap);
   }),
   update: (id, body) => run(async () => {
     const user = await requireUser();

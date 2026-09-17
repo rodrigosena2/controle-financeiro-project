@@ -91,11 +91,11 @@ export default function App() {
     setLegacy(""); setSuccess(""); setComposerOpen(false); setError(message);
   }, []);
 
-  const refresh = useCallback(async ({ afterWrite = false, queryOverride } = {}) => {
+  const refresh = useCallback(async ({ afterWrite = false, queryOverride, background = false } = {}) => {
     const version = ++generation.current;
     let activeQuery = queryOverride || queryRef.current;
     if (queryOverride) { queryRef.current = queryOverride; setQuery(queryOverride); }
-    setRefreshing(true); setError("");
+    if (!background) { setRefreshing(true); setError(""); }
     try {
       const user = await authApi.me();
       if (version !== generation.current) return false;
@@ -132,10 +132,13 @@ export default function App() {
       if (version !== generation.current) return false;
       setSuccess(""); setDataReady(false);
       if (e.status === 401) endSession(sessionRef.current ? "Sua sessão expirou. Entre novamente para continuar." : "");
-      else setError((afterWrite ? "Alteração salva, mas não foi possível atualizar a lista. " : "") + e.message);
+      else if (!background || afterWrite) setError((afterWrite ? "Alteração salva, mas não foi possível atualizar a lista. " : "") + e.message);
       return false;
     } finally {
-      if (version === generation.current) { setChecking(false); setRefreshing(false); }
+      if (version === generation.current) {
+        setChecking(false);
+        if (!background) setRefreshing(false);
+      }
     }
   }, [endSession]);
 
@@ -167,9 +170,14 @@ export default function App() {
         await authApi.register({ ...credentials, displayName: data.get("displayName").trim() });
         registered = true; setRegister(false);
       }
-      await authApi.login(credentials);
+      const authenticatedUser = await authApi.login(credentials);
+      sessionRef.current = authenticatedUser;
+      setSession(authenticatedUser);
       form.elements.password.value = "";
-      if (await refresh()) setSuccess(registered ? "Conta criada e sessão iniciada." : "Sessão iniciada com sucesso.");
+      setChecking(false);
+      setDataReady(false);
+      setSuccess(registered ? "Conta criada e sessão iniciada." : "Sessão iniciada com sucesso.");
+      void refresh({ background: true });
     } catch (e) {
       setError((registered ? "Conta criada. Entre com suas credenciais para continuar. " : "") + e.message);
     } finally { finishAction(); }
@@ -179,7 +187,10 @@ export default function App() {
     if (!dataReady || !beginAction()) return false;
     try {
       await operation();
-      if (await refresh({ afterWrite: true })) setSuccess(message);
+      setSuccess(message);
+      // The write is confirmed before closing the form. Refresh the list in
+      // the background so the interface does not wait for another read cycle.
+      void refresh({ afterWrite: true, background: true });
       return true;
     } catch (e) {
       if (e.status === 401) endSession("Sua sessão expirou. Entre novamente para continuar.");

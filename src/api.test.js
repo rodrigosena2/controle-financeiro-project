@@ -14,7 +14,7 @@ import {
   writeBatch as mockWriteBatch,
   runTransaction as mockRunTransaction,
   __resetAutoId as resetAutoId
-} from "firebase/firestore";
+} from "firebase/firestore/lite";
 
 jest.mock("./firebaseClient", () => ({
   auth: { currentUser: null, authStateReady: jest.fn() },
@@ -29,7 +29,7 @@ jest.mock("firebase/auth", () => ({
   updateProfile: jest.fn()
 }));
 
-jest.mock("firebase/firestore", () => {
+jest.mock("firebase/firestore/lite", () => {
   let autoId = 0;
   return {
     collection: (_, ...segments) => ({ kind: "collection", path: segments.join("/") }),
