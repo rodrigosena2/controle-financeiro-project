@@ -1,5 +1,5 @@
-// Browser-only UI regression. API is mocked; SQL/security regression remains in dotnet test.
-// Use PLAYWRIGHT_MODULE to reuse an externally installed Playwright without adding a UI dependency.
+// Browser-only UI regression. A localhost-only adapter mocks Firebase; SQL/security
+// regression is covered by the backend and Firestore emulator suites.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -28,14 +28,52 @@ const fixtures = () => [
 
 async function setup(page, authenticated = true) {
   const state = { authenticated, rows: fixtures(), offline: false, failWrites: false, deletes: 0 };
-  await page.route("**/api/**", async route => {
+  await page.addInitScript(() => {
+    const request = async (path, method = "GET", body) => {
+      const response = await fetch("/__test-api" + path, {
+        method, headers: body ? { "Content-Type": "application/json" } : {},
+        ...(body ? { body: JSON.stringify(body) } : {})
+      });
+      if (!response.ok) {
+        const error = new Error(response.status === 401
+          ? "Sua sessão expirou. Entre novamente para continuar."
+          : `Resposta HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.status === 204 ? null : response.json();
+    };
+    const query = values => {
+      const params = new URLSearchParams();
+      Object.entries(values || {}).forEach(([key, value]) => {
+        if (value !== "" && value !== null && value !== undefined) params.set(key, value);
+      });
+      return params.toString() ? `?${params}` : "";
+    };
+    window.__CONTROLE_FINANCEIRO_TEST_API__ = {
+      authApi: {
+        register: body => request("/auth/register", "POST", body),
+        login: body => request("/auth/login", "POST", body),
+        logout: () => request("/auth/logout", "POST"),
+        me: () => request("/auth/me")
+      },
+      transactionsApi: {
+        list: values => request("/transactions" + query(values)),
+        summary: values => request("/transactions/summary" + query(values)),
+        categories: () => request("/transactions/categories"),
+        create: body => request("/transactions", "POST", body),
+        update: (id, body) => request(`/transactions/${encodeURIComponent(id)}`, "PUT", body),
+        remove: id => request(`/transactions/${encodeURIComponent(id)}`, "DELETE"),
+        endRecurrence: id => request(`/transactions/recurrences/${encodeURIComponent(id)}/end`, "POST")
+      }
+    };
+  });
+  await page.route("**/__test-api/**", async route => {
     const request = route.request();
     const resource = new URL(request.url()).pathname;
     const method = request.method();
     const respond = (status, data) => route.fulfill({ status, contentType: "application/json", body: status === 204 ? "" : JSON.stringify(data) });
     if (state.offline) return route.abort("connectionfailed");
-    if (resource.endsWith("/csrf")) return respond(200, { token: "test-csrf" });
-    if (method !== "GET") assert.equal(request.headers()["x-csrf-token"], "test-csrf");
     if (resource.endsWith("/register")) return respond(201, { id: "a" });
     if (resource.endsWith("/login")) { state.authenticated = true; return respond(200, { id: "a" }); }
     if (!state.authenticated) return respond(401, {});

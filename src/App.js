@@ -121,7 +121,7 @@ export default function App() {
       ]);
       if (version !== generation.current) return false;
       if (!categoryCatalog || !Array.isArray(categoryCatalog.income) || !Array.isArray(categoryCatalog.expense))
-        throw new Error("A API retornou um catálogo de categorias inválido.");
+        throw new Error("O serviço retornou um catálogo de categorias inválido.");
       setCatalog(categoryCatalog);
       setRows(displayRows(list.items, categoryCatalog));
       setPaging({ page: list.page, pageSize: list.pageSize, totalItems: list.totalItems, totalPages: list.totalPages });

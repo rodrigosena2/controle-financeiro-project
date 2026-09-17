@@ -8,6 +8,10 @@
 # testing
 /coverage
 /artifacts/
+/.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
 
 # production
 /build

@@ -1,11 +1,23 @@
-// CRA injects this public configuration at build time. Never put secrets here.
-export const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || "/api").replace(/\/+$/, "");
+const read = name => (process.env[name] || "").trim();
 
-export function resolveApiBase(base = API_BASE_URL, origin = window.location.origin) {
-  const resolved = new URL(base, origin);
-  if ((!base.startsWith("/") && !/^https?:\/\//.test(base)) ||
-      resolved.origin !== origin || resolved.search || resolved.hash) {
-    throw new Error("Configure a API na mesma origem HTTPS da aplicação (por exemplo, /api).");
+export const firebaseConfig = {
+  apiKey: read("REACT_APP_FIREBASE_API_KEY"),
+  authDomain: read("REACT_APP_FIREBASE_AUTH_DOMAIN"),
+  projectId: read("REACT_APP_FIREBASE_PROJECT_ID"),
+  storageBucket: read("REACT_APP_FIREBASE_STORAGE_BUCKET"),
+  messagingSenderId: read("REACT_APP_FIREBASE_MESSAGING_SENDER_ID"),
+  appId: read("REACT_APP_FIREBASE_APP_ID"),
+  measurementId: read("REACT_APP_FIREBASE_MEASUREMENT_ID")
+};
+
+const requiredFields = ["apiKey", "authDomain", "projectId", "appId"];
+
+export function requireFirebaseConfig(config = firebaseConfig) {
+  const missing = requiredFields.filter(field => !config[field]);
+  if (missing.length) {
+    throw new Error(
+      "Configuração do Firebase incompleta. Defina as variáveis REACT_APP_FIREBASE_* antes de iniciar a aplicação."
+    );
   }
-  return resolved.pathname.replace(/\/+$/, "");
+  return config;
 }

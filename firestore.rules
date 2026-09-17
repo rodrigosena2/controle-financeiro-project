@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isDate(value) {
+      return value is string && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function validCategory(type, category) {
+      return (type == 'Income' && category in ['Salary', 'Freelance', 'Investments', 'OtherIncome'])
+        || (type == 'Expense' && category in [
+          'Food', 'Housing', 'Transportation', 'Health', 'Education', 'Leisure',
+          'Subscriptions', 'OtherExpense'
+        ]);
+    }
+
+    function validTransaction(userId, data) {
+      return data.keys().hasOnly([
+          'userId', 'description', 'amountCents', 'type', 'category', 'date',
+          'createdAt', 'updatedAt', 'recurrenceId', 'recurrenceFrequency'
+        ])
+        && data.userId == userId
+        && data.description is string
+        && data.description.size() >= 3
+        && data.description.size() <= 200
+        && data.amountCents is int
+        && data.amountCents > 0
+        && data.amountCents <= 9007199254740991
+        && validCategory(data.type, data.category)
+        && isDate(data.date)
+        && data.createdAt is timestamp
+        && (data.updatedAt == null || data.updatedAt is timestamp)
+        && (
+          (data.recurrenceId == null && data.recurrenceFrequency == null)
+          || (data.recurrenceId is string
+            && data.recurrenceId.size() > 0
+            && data.recurrenceFrequency in ['Weekly', 'Monthly'])
+        );
+    }
+
+    function validRecurrence(userId, data) {
+      return data.keys().hasOnly([
+          'userId', 'description', 'amountCents', 'type', 'category', 'frequency',
+          'startDate', 'nextOccurrenceDate', 'active', 'createdAt', 'updatedAt'
+        ])
+        && data.userId == userId
+        && data.description is string
+        && data.description.size() >= 3
+        && data.description.size() <= 200
+        && data.amountCents is int
+        && data.amountCents > 0
+        && data.amountCents <= 9007199254740991
+        && validCategory(data.type, data.category)
+        && data.frequency in ['Weekly', 'Monthly']
+        && isDate(data.startDate)
+        && isDate(data.nextOccurrenceDate)
+        && data.active is bool
+        && data.createdAt is timestamp
+        && (data.updatedAt == null || data.updatedAt is timestamp);
+    }
+
+    match /users/{userId}/transactions/{transactionId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && validTransaction(userId, request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == null;
+      allow update: if isOwner(userId)
+        && validTransaction(userId, request.resource.data)
+        && resource.data.userId == userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.recurrenceId == resource.data.recurrenceId
+        && request.resource.data.recurrenceFrequency == resource.data.recurrenceFrequency
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'description', 'amountCents', 'type', 'category', 'date', 'updatedAt'
+        ]);
+      allow delete: if isOwner(userId) && resource.data.userId == userId;
+    }
+
+    match /users/{userId}/recurrences/{recurrenceId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && validRecurrence(userId, request.resource.data)
+        && request.resource.data.active == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == null;
+      allow update: if isOwner(userId)
+        && validRecurrence(userId, request.resource.data)
+        && resource.data.userId == userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'nextOccurrenceDate', 'active', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

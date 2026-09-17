@@ -1,5 +1,9 @@
 # Funcionalidades financeiras
 
+> Contratos originalmente implementados na API ASP.NET Core. O runtime Firebase mantém
+> os mesmos comportamentos por meio de `src/api.js` e das regras do Firestore; detalhes
+> da migração estão em [FIREBASE.md](FIREBASE.md).
+
 ## Categorias
 
 As categorias são um catálogo fixo fornecido por `GET /api/transactions/categories`.

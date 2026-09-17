@@ -1,5 +1,8 @@
 # Validação das funcionalidades financeiras — 17/09/2026
 
+> Registro da implementação SQL Server preservada. A suíte Firebase atual cobre os
+> comportamentos equivalentes e o isolamento nas regras do Firestore.
+
 ## Escopo entregue
 
 - categorias fixas compatíveis com receita/despesa;

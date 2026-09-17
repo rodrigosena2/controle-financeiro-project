@@ -1,9 +1,11 @@
 # Controle Financeiro
 
-Aplicação full stack para registrar entradas e saídas, acompanhar totais e persistir
-os lançamentos por conta no SQL Server.
+Aplicação de controle financeiro para registrar entradas e saídas, acompanhar totais e
+persistir lançamentos por conta no Cloud Firestore.
 
-O frontend usa cadastro, login e logout com ASP.NET Core Identity. As transações vêm do SQL Server e pertencem exclusivamente à conta autenticada. Consulte [Autenticação e execução HTTPS](docs/AUTHENTICATION.md) para iniciar o sistema completo.
+O frontend usa Firebase Authentication para cadastro, login, logout e restauração de
+sessão. As regras do Firestore isolam os dados pelo UID autenticado. Consulte
+[Firebase e publicação na Vercel](docs/FIREBASE.md) para configurar e publicar o sistema.
 
 ## Funcionalidades atuais
 
@@ -11,9 +13,9 @@ O frontend usa cadastro, login e logout com ASP.NET Core Identity. As transaçõ
 - Cálculo do total de entradas, saídas e saldo.
 - Edição e exclusão de lançamentos.
 - Categorias compatíveis com receitas/despesas, filtros combinados e busca.
-- Resumo mensal ou personalizado calculado pela API, ordenação e paginação.
+- Resumo mensal ou personalizado calculado sobre os dados do período, ordenação e paginação.
 - Transações recorrentes semanais e mensais, com encerramento da série.
-- Persistência no SQL Server por usuário; cookie HttpOnly e proteção CSRF.
+- Persistência no Cloud Firestore com regras de acesso por usuário.
 - Layout mobile-first, acessível e adaptável para celular, tablet e desktop.
 - Feedback visual consistente, validação associada aos campos e confirmação de exclusão.
 
@@ -24,11 +26,12 @@ O frontend usa cadastro, login e logout com ASP.NET Core Identity. As transaçõ
 - styled-components 5
 - react-icons 4
 - Jest e Testing Library
-- ASP.NET Core / .NET 10 LTS
-- Entity Framework Core 10
-- SQL Server
-- Swagger/OpenAPI
-- xUnit
+- Firebase Authentication
+- Cloud Firestore e Emulator Suite
+
+A implementação anterior em ASP.NET Core, Identity, Entity Framework e SQL Server foi
+preservada em `backend/` e no histórico para referência de portfólio, mas não participa
+do runtime Firebase.
 
 O projeto usa `npm` como gerenciador de pacotes e mantém somente `package-lock.json` para instalações reproduzíveis.
 
@@ -36,10 +39,11 @@ O projeto usa `npm` como gerenciador de pacotes e mantém somente `package-lock.
 
 ```powershell
 npm.cmd install
-npm.cmd run build
+npm.cmd start
 ```
 
-Para usar o sistema completo, configure o banco e o certificado HTTPS conforme [AUTHENTICATION.md](docs/AUTHENTICATION.md), depois execute `dotnet run --project backend/ControleFinanceiro.Api` e abra `https://localhost:7091`.
+Copie `.env.example` para `.env.local` e preencha a configuração do aplicativo Web do
+Firebase antes de iniciar.
 
 ## Validação
 
@@ -47,10 +51,11 @@ Para usar o sistema completo, configure o banco e o certificado HTTPS conforme [
 npm.cmd test -- --watchAll=false
 npm.cmd run lint
 npm.cmd run build
+npm.cmd run test:firebase
 npm.cmd run test:responsive
 ```
 
-### Backend
+### Backend anterior
 
 ```powershell
 dotnet tool restore
@@ -60,7 +65,7 @@ dotnet test ControleFinanceiro.slnx
 dotnet run --project backend/ControleFinanceiro.Api
 ```
 
-Com a API em execução, a interface compilada fica em `https://localhost:7091` e o Swagger em `https://localhost:7091/swagger`. Execute `npm.cmd run build` antes e confie no certificado de desenvolvimento conforme a documentação de autenticação.
+Esses comandos validam a implementação .NET preservada, não o runtime Firebase atual.
 
 ## Documentação
 
@@ -75,10 +80,10 @@ Com a API em execução, a interface compilada fica em `https://localhost:7091` 
 - [Auditoria e melhoria de UX/UI](docs/UX_UI.md)
 - [Categorias, filtros, resumo, paginação e recorrência](docs/FINANCIAL_FEATURES.md)
 - [Validação desta etapa financeira](docs/FINANCIAL_VALIDATION.md)
+- [Firebase, segurança, ambiente e Vercel](docs/FIREBASE.md)
 
 ## Estado atual
 
-O SQL Server continua sendo a fonte oficial. Categorias, filtros, resumo por período,
-paginação e recorrência simples estão documentados separadamente. A importação do
-legado permanece desativada; recuperação de senha por email, teste físico em celular
-e deploy continuam como etapas futuras.
+O Cloud Firestore é a fonte oficial do runtime atual. A importação de dados do SQL Server
+ou do legado permanece desativada e nunca ocorre automaticamente. Recuperação de senha,
+teste físico em celular e publicação final continuam como etapas futuras.

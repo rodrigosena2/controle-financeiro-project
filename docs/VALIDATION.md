@@ -1,5 +1,8 @@
 # Validação da linha de base
 
+> Registro histórico da aplicação inicial. A validação do runtime Firebase está em
+> `npm test`, `npm run test:responsive` e `npm run test:firebase`.
+
 Data da execução: 8 de setembro de 2026.
 
 ## Resultado

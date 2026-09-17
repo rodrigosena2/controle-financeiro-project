@@ -1,5 +1,8 @@
 # Integração e estabilidade — 16/09/2026
 
+> Registro histórico da versão React + ASP.NET Core. A validação Firebase atual está em
+> `firebase-tests/` e em `docs/FIREBASE.md`.
+
 ## Escopo e resultado
 
 Foram aproveitados o CRUD React/API e todos os contratos já existentes. A revisão

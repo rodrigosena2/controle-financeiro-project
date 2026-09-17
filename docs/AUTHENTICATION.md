@@ -1,5 +1,9 @@
 # Autenticação e isolamento de dados
 
+> Documento histórico da implementação ASP.NET Core Identity. O runtime atual usa
+> Firebase Authentication e Firestore; veja [FIREBASE.md](FIREBASE.md). Este arquivo é
+> mantido para referência da versão .NET/SQL Server preservada em `backend/`.
+
 ## Decisão: Identity e cookies
 O backend usa ASP.NET Core Identity com armazenamento EF Core no SQL Server.
 Senhas são processadas pelo PasswordHasher nativo (hash com salt); não são registradas

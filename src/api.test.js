@@ -1,154 +1,268 @@
 import { authApi, transactionsApi, ApiError } from "./api";
+import { auth as mockAuth } from "./firebaseClient";
+import {
+  createUserWithEmailAndPassword as mockCreateUser,
+  signInWithEmailAndPassword as mockLogin,
+  signOut as mockSignOut,
+  updateProfile as mockUpdateProfile
+} from "firebase/auth";
+import {
+  getDoc as mockGetDoc,
+  getDocs as mockGetDocs,
+  updateDoc as mockUpdateDoc,
+  deleteDoc as mockDeleteDoc,
+  writeBatch as mockWriteBatch,
+  runTransaction as mockRunTransaction,
+  __resetAutoId as resetAutoId
+} from "firebase/firestore";
 
-const response = (status, body) => Promise.resolve({
-  ok: status >= 200 && status < 300, status,
-  json: () => Promise.resolve(body)
+jest.mock("./firebaseClient", () => ({
+  auth: { currentUser: null, authStateReady: jest.fn() },
+  db: { name: "test-db" },
+  authPersistenceReady: Promise.resolve()
+}));
+
+jest.mock("firebase/auth", () => ({
+  createUserWithEmailAndPassword: jest.fn(),
+  signInWithEmailAndPassword: jest.fn(),
+  signOut: jest.fn(),
+  updateProfile: jest.fn()
+}));
+
+jest.mock("firebase/firestore", () => {
+  let autoId = 0;
+  return {
+    collection: (_, ...segments) => ({ kind: "collection", path: segments.join("/") }),
+    doc: (first, ...segments) => {
+      if (first?.kind === "collection") {
+        const id = segments[0] || `auto-${++autoId}`;
+        return { kind: "document", id, path: `${first.path}/${id}` };
+      }
+      const id = segments[segments.length - 1];
+      return { kind: "document", id, path: segments.join("/") };
+    },
+    getDoc: jest.fn(),
+    getDocs: jest.fn(),
+    updateDoc: jest.fn(),
+    deleteDoc: jest.fn(),
+    writeBatch: jest.fn(),
+    runTransaction: jest.fn(),
+    query: (reference, ...constraints) => ({ kind: "query", path: reference.path, constraints }),
+    where: (...args) => ({ kind: "where", args }),
+    orderBy: (...args) => ({ kind: "orderBy", args }),
+    serverTimestamp: () => ({ serverTimestamp: true }),
+    __resetAutoId: () => { autoId = 0; }
+  };
 });
 
-beforeEach(() => { global.fetch = jest.fn(); });
-afterEach(() => { delete global.fetch; });
+let mockBatch;
+let userSequence = 0;
 
-test("recupera sessão enviando cookie e sem CSRF em GET", async () => {
-  fetch.mockReturnValueOnce(response(200, { id: "a" }));
-  await authApi.me();
-  expect(fetch).toHaveBeenCalledWith("/api/auth/me", expect.objectContaining({ credentials: "include" }));
-  expect(fetch).toHaveBeenCalledTimes(1);
+const documentSnapshot = (id, value, path = `documents/${id}`) => ({
+  id,
+  ref: { kind: "document", id, path },
+  exists: () => value !== undefined,
+  data: () => value
+});
+const querySnapshot = values => ({ docs: values.map(([id, value]) => documentSnapshot(id, value)) });
+const transaction = (uid, overrides = {}) => ({
+  userId: uid,
+  description: "Salário",
+  amountCents: 100000,
+  type: "Income",
+  category: "Salary",
+  date: "2026-09-10",
+  createdAt: null,
+  updatedAt: null,
+  recurrenceId: null,
+  recurrenceFrequency: null,
+  ...overrides
 });
 
-test("obtém CSRF e envia o token em toda operação de escrita", async () => {
-  fetch.mockReturnValueOnce(response(200, { token: "csrf-token" }))
-    .mockReturnValueOnce(response(201, { id: "1" }));
-  await transactionsApi.create({ description: "Salário" });
-  expect(fetch.mock.calls[0][0]).toBe("/api/auth/csrf");
-  expect(fetch.mock.calls[1][1].headers["X-CSRF-TOKEN"]).toBe("csrf-token");
-  expect(fetch.mock.calls[1][1].credentials).toBe("include");
-});
-
-test("preserva status e mensagem Problem Details da API", async () => {
-  fetch.mockReturnValueOnce(response(401, { title: "Não autorizado" }));
-  await expect(authApi.me()).rejects.toMatchObject({ name: "ApiError", status: 401, message: "Não autorizado" });
-});
-
-test("distingue indisponibilidade de uma resposta da API", async () => {
-  fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-  await expect(authApi.me()).rejects.toEqual(expect.objectContaining({
-    name: "ApiError", status: 0, message: expect.stringContaining("conectar à API")
+beforeEach(() => {
+  jest.clearAllMocks();
+  resetAutoId();
+  mockAuth.currentUser = { uid: `user-${++userSequence}`, email: "a@example.test", displayName: "Conta A" };
+  mockAuth.authStateReady.mockResolvedValue();
+  mockSignOut.mockResolvedValue();
+  mockUpdateProfile.mockResolvedValue();
+  mockUpdateDoc.mockResolvedValue();
+  mockDeleteDoc.mockResolvedValue();
+  mockBatch = { set: jest.fn(), update: jest.fn(), commit: jest.fn().mockResolvedValue() };
+  mockWriteBatch.mockReturnValue(mockBatch);
+  mockRunTransaction.mockImplementation(async (_, operation) => operation({
+    get: reference => mockGetDoc(reference),
+    set: mockBatch.set,
+    update: mockBatch.update
   }));
+  mockGetDocs.mockResolvedValue(querySnapshot([]));
+});
+
+test("recupera a sessão persistida pelo Firebase", async () => {
+  await expect(authApi.me()).resolves.toEqual({
+    id: mockAuth.currentUser.uid, email: "a@example.test", displayName: "Conta A"
+  });
+  expect(mockAuth.authStateReady).toHaveBeenCalled();
+});
+
+test("endpoint lógico protegido recusa usuário sem sessão", async () => {
+  mockAuth.currentUser = null;
+  await expect(authApi.me()).rejects.toMatchObject({ name: "ApiError", status: 401 });
   expect(ApiError).toBeDefined();
 });
 
-test.each([
-  [400, "Confira os dados"],
-  [401, "sessão expirou"],
-  [403, "não tem permissão"],
-  [404, "Registro não encontrado"],
-  [500, "servidor não conseguiu"]
-])("status %s com corpo vazio recebe mensagem útil", async (status, message) => {
-  fetch.mockResolvedValueOnce({ ok: false, status, json: () => Promise.reject(new SyntaxError()) });
-  await expect(transactionsApi.list()).rejects.toMatchObject({
-    status, message: expect.stringContaining(message)
-  });
+test("cadastra usuário e grava o nome no perfil", async () => {
+  const user = { uid: "new-user", email: "new@example.test", displayName: null };
+  mockCreateUser.mockResolvedValue({ user });
+  mockUpdateProfile.mockImplementation(async (_, profile) => { user.displayName = profile.displayName; });
+  await expect(authApi.register({
+    email: "new@example.test", displayName: "Nova Conta", password: "Senha!Segura123"
+  })).resolves.toMatchObject({ id: "new-user", displayName: "Nova Conta" });
+  expect(mockCreateUser).toHaveBeenCalledWith(mockAuth, "new@example.test", "Senha!Segura123");
+  expect(mockUpdateProfile).toHaveBeenCalledWith(user, { displayName: "Nova Conta" });
 });
 
-test("exibe mensagens de ValidationProblemDetails e preserva o status", async () => {
-  fetch.mockReturnValueOnce(response(200, { token: "token" }))
-    .mockReturnValueOnce(response(400, { errors: { Description: ["Descrição inválida."], Amount: ["Valor inválido."] } }));
-  await expect(transactionsApi.create({})).rejects.toMatchObject({
-    status: 400, message: "Descrição inválida. Valor inválido."
-  });
+test("mantém a política forte de senha antes de chamar o Firebase", async () => {
+  await expect(authApi.register({ email: "a@example.test", displayName: "Conta", password: "fraca" }))
+    .rejects.toMatchObject({ status: 400, kind: "validation" });
+  expect(mockCreateUser).not.toHaveBeenCalled();
 });
 
-test("não mostra detalhes internos de erro 500", async () => {
-  fetch.mockReturnValueOnce(response(500, { detail: "SQL exception: connection secrets" }));
-  await expect(transactionsApi.list()).rejects.toMatchObject({
-    status: 500, message: expect.not.stringContaining("secrets")
-  });
+test("cadastro duplicado recebe mensagem segura", async () => {
+  mockCreateUser.mockRejectedValue({ code: "auth/email-already-in-use" });
+  await expect(authApi.register({
+    email: "a@example.test", displayName: "Conta A", password: "Senha!Segura123"
+  })).rejects.toMatchObject({ status: 400, message: expect.not.stringContaining("already") });
 });
 
-test.each([
-  ["register", () => authApi.register({ email: "a@example.test" }), "/api/auth/register", "POST"],
-  ["login", () => authApi.login({ email: "a@example.test" }), "/api/auth/login", "POST"],
-  ["logout", () => authApi.logout(), "/api/auth/logout", "POST"],
-  ["update", () => transactionsApi.update("123", { amount: 12 }), "/api/transactions/123", "PUT"],
-  ["delete", () => transactionsApi.remove("123"), "/api/transactions/123", "DELETE"]
-])("%s mantém cookies e CSRF nos contratos existentes", async (_, operation, path, method) => {
-  fetch.mockReturnValueOnce(response(200, { token: "new-token" })).mockReturnValueOnce(response(204));
-  await expect(operation()).resolves.toBeNull();
-  expect(fetch).toHaveBeenLastCalledWith(path, expect.objectContaining({
-    method, credentials: "include", cache: "no-store",
-    headers: expect.objectContaining({ "X-CSRF-TOKEN": "new-token" })
+test("login incorreto e logout usam Firebase Authentication", async () => {
+  mockLogin.mockRejectedValueOnce({ code: "auth/invalid-credential" });
+  await expect(authApi.login({ email: "a@example.test", password: "errada" }))
+    .rejects.toMatchObject({ status: 401, message: "E-mail ou senha inválidos." });
+  await expect(authApi.logout()).resolves.toBeNull();
+  expect(mockSignOut).toHaveBeenCalledWith(mockAuth);
+});
+
+test("filtra, ordena e pagina somente documentos da conta autenticada", async () => {
+  const uid = mockAuth.currentUser.uid;
+  const values = [
+    ["income", transaction(uid)],
+    ["food", transaction(uid, { description: "Mercado", amountCents: 30000, type: "Expense", category: "Food", date: "2026-09-11" })],
+    ["rent", transaction(uid, { description: "Moradia", amountCents: 80000, type: "Expense", category: "Housing", date: "2026-09-12" })]
+  ];
+  mockGetDocs.mockImplementation(async reference => reference.path.endsWith("/transactions")
+    ? querySnapshot(values) : querySnapshot([]));
+
+  const result = await transactionsApi.list({
+    from: "2026-09-01", to: "2026-09-30", type: "Expense",
+    search: "a", sortBy: "Amount", sortDirection: "Desc", page: 1, pageSize: 1
+  });
+
+  expect(result).toMatchObject({ page: 1, pageSize: 1, totalItems: 2, totalPages: 2 });
+  expect(result.items[0]).toMatchObject({ id: "rent", userId: uid, amount: 800, type: "Expense" });
+  expect(mockGetDocs.mock.calls.some(([reference]) => reference.path === `users/${uid}/transactions`)).toBe(true);
+});
+
+test("calcula o resumo em centavos sem erro de ponto flutuante", async () => {
+  const uid = mockAuth.currentUser.uid;
+  mockGetDocs.mockImplementation(async reference => reference.path.endsWith("/transactions")
+    ? querySnapshot([
+      ["one", transaction(uid, { amountCents: 10 })],
+      ["two", transaction(uid, { amountCents: 20 })],
+      ["expense", transaction(uid, { amountCents: 5, type: "Expense", category: "Food" })]
+    ]) : querySnapshot([]));
+  await expect(transactionsApi.summary({ from: "2026-09-01", to: "2026-09-30" }))
+    .resolves.toMatchObject({ income: 0.3, expense: 0.05, balance: 0.25 });
+});
+
+test("cria transação no caminho do UID e persiste o valor em centavos", async () => {
+  const uid = mockAuth.currentUser.uid;
+  mockGetDoc.mockImplementation(async reference => {
+    const written = mockBatch.set.mock.calls.find(([item]) => item.path === reference.path)?.[1];
+    return documentSnapshot(reference.id, written, reference.path);
+  });
+  await transactionsApi.create({
+    description: "Freelance", amount: 125.35, type: "Income", category: "Freelance", date: "2026-09-17"
+  });
+  const [reference, value] = mockBatch.set.mock.calls[0];
+  expect(reference.path).toBe(`users/${uid}/transactions/auto-1`);
+  expect(value).toMatchObject({ userId: uid, amountCents: 12535, recurrenceId: null });
+  expect(mockBatch.commit).toHaveBeenCalled();
+});
+
+test("recorrência mensal usa identificador determinístico e trata fim do mês", async () => {
+  const uid = mockAuth.currentUser.uid;
+  mockGetDoc.mockImplementation(async reference => {
+    const written = mockBatch.set.mock.calls.find(([item]) => item.path === reference.path)?.[1];
+    return documentSnapshot(reference.id, written, reference.path);
+  });
+  await transactionsApi.create({
+    description: "Mensalidade", amount: 90, type: "Expense", category: "Education",
+    date: "2026-01-31", recurrenceFrequency: "Monthly"
+  });
+  const recurrenceWrite = mockBatch.set.mock.calls.find(([reference]) => reference.path.includes("/recurrences/"));
+  const transactionWrite = mockBatch.set.mock.calls.find(([reference]) => reference.path.includes("/transactions/"));
+  expect(recurrenceWrite[0].path).toBe(`users/${uid}/recurrences/auto-1`);
+  expect(recurrenceWrite[1]).toMatchObject({ nextOccurrenceDate: "2026-02-28", frequency: "Monthly" });
+  expect(transactionWrite[0].path).toBe(`users/${uid}/transactions/auto-1_20260131`);
+});
+
+test("materializa ocorrências vencidas uma vez e avança a série em transação atômica", async () => {
+  const uid = mockAuth.currentUser.uid;
+  const recurrence = {
+    userId: uid,
+    description: "Internet",
+    amountCents: 12000,
+    type: "Expense",
+    category: "Subscriptions",
+    frequency: "Weekly",
+    startDate: "2026-08-25",
+    nextOccurrenceDate: "2026-09-01",
+    active: true,
+    createdAt: null,
+    updatedAt: null
+  };
+  mockGetDocs.mockImplementation(async reference => reference.path.endsWith("/recurrences")
+    ? querySnapshot([["internet-series", recurrence]]) : querySnapshot([]));
+  mockGetDoc.mockResolvedValue(documentSnapshot("internet-series", recurrence));
+
+  await transactionsApi.list({ from: "2026-09-01", to: "2026-09-30" });
+  await transactionsApi.list({ from: "2026-09-01", to: "2026-09-30" });
+
+  expect(mockRunTransaction).toHaveBeenCalledTimes(1);
+  expect(mockBatch.set).toHaveBeenCalledTimes(3);
+  expect(mockBatch.set.mock.calls.map(([reference]) => reference.path)).toEqual([
+    `users/${uid}/transactions/internet-series_20260901`,
+    `users/${uid}/transactions/internet-series_20260908`,
+    `users/${uid}/transactions/internet-series_20260915`
+  ]);
+  expect(mockBatch.update).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    nextOccurrenceDate: "2026-09-22"
   }));
 });
 
-test("CSRF é renovado após mudança de sessão e não vai para localStorage", async () => {
-  fetch.mockReturnValueOnce(response(200, { token: "before-login" }))
-    .mockReturnValueOnce(response(200, { id: "a" }))
-    .mockReturnValueOnce(response(200, { token: "after-login" }))
-    .mockReturnValueOnce(response(201, { id: "1" }));
-  await authApi.login({ email: "a@example.test", password: "Senha!123456" });
-  await transactionsApi.create({ amount: 1 });
-  expect(fetch.mock.calls[1][1].headers["X-CSRF-TOKEN"]).toBe("before-login");
-  expect(fetch.mock.calls[3][1].headers["X-CSRF-TOKEN"]).toBe("after-login");
-  expect(localStorage.length).toBe(0);
+test("edição e exclusão nunca aceitam caminho de outro usuário", async () => {
+  const uid = mockAuth.currentUser.uid;
+  mockGetDoc.mockImplementation(async reference => documentSnapshot(reference.id,
+    transaction(uid), reference.path));
+  await transactionsApi.update("id-from-user-b", {
+    description: "Atualizada", amount: 10, type: "Income", category: "Salary", date: "2026-09-17"
+  });
+  await transactionsApi.remove("id-from-user-b");
+  expect(mockGetDoc).toHaveBeenCalledWith(expect.objectContaining({
+    path: `users/${uid}/transactions/id-from-user-b`
+  }));
+  expect(mockUpdateDoc).toHaveBeenCalledWith(expect.objectContaining({
+    path: `users/${uid}/transactions/id-from-user-b`
+  }), expect.objectContaining({ amountCents: 1000 }));
+  expect(mockDeleteDoc).toHaveBeenCalledWith(expect.objectContaining({
+    path: `users/${uid}/transactions/id-from-user-b`
+  }));
 });
 
-test("falha ao obter CSRF impede enviar a mutação", async () => {
-  fetch.mockReturnValueOnce(response(403, {}));
-  await expect(transactionsApi.remove("123")).rejects.toMatchObject({ status: 403 });
-  expect(fetch).toHaveBeenCalledTimes(1);
-});
-
-test("token CSRF ausente impede enviar a mutação", async () => {
-  fetch.mockReturnValueOnce(response(200, {}));
-  await expect(transactionsApi.remove("123")).rejects.toMatchObject({ kind: "protocol" });
-  expect(fetch).toHaveBeenCalledTimes(1);
-});
-
-test("JSON inválido tem erro explícito de protocolo", async () => {
-  fetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.reject(new SyntaxError()) });
-  await expect(transactionsApi.list()).rejects.toMatchObject({ status: 200, kind: "protocol" });
-});
-
-test("escrita com conexão perdida não é reenviada automaticamente", async () => {
-  fetch.mockReturnValueOnce(response(200, { token: "token" }))
-    .mockRejectedValueOnce(new TypeError("Network error"));
-  await expect(transactionsApi.create({})).rejects.toMatchObject({ status: 0, kind: "network" });
-  expect(fetch).toHaveBeenCalledTimes(2);
-});
-
-test("uma solicitação travada é encerrada com mensagem de timeout", async () => {
-  jest.useFakeTimers();
-  try {
-    fetch.mockImplementation((_, options) => new Promise((resolve, reject) => {
-      options.signal.addEventListener("abort", () => reject(new Error("aborted")));
-    }));
-    const pending = authApi.me();
-    jest.advanceTimersByTime(15000);
-    await expect(pending).rejects.toMatchObject({
-      status: 0, message: expect.stringContaining("demorou para responder")
-    });
-  } finally { jest.useRealTimers(); }
-});
-
-test("serializa filtros e paginação sem valores vazios", async () => {
-  fetch.mockReturnValueOnce(response(200, { items: [] }));
-  await transactionsApi.list({ from: "2026-09-01", type: "Expense", category: "", page: 2, pageSize: 10 });
-  expect(fetch).toHaveBeenCalledWith(
-    "/api/transactions?from=2026-09-01&type=Expense&page=2&pageSize=10",
-    expect.objectContaining({ method: "GET", credentials: "include" })
-  );
-});
-
-test("consulta resumo e catálogo e encerra recorrência com CSRF", async () => {
-  fetch.mockReturnValueOnce(response(200, { balance: 10 }))
-    .mockReturnValueOnce(response(200, { income: [], expense: [] }))
-    .mockReturnValueOnce(response(200, { token: "csrf" }))
-    .mockReturnValueOnce(response(204));
-  await transactionsApi.summary({ from: "2026-09-01", to: "2026-09-30" });
-  await transactionsApi.categories();
-  await transactionsApi.endRecurrence("abc");
-  expect(fetch.mock.calls[0][0]).toBe("/api/transactions/summary?from=2026-09-01&to=2026-09-30");
-  expect(fetch.mock.calls[1][0]).toBe("/api/transactions/categories");
-  expect(fetch.mock.calls[3][0]).toBe("/api/transactions/recurrences/abc/end");
-  expect(fetch.mock.calls[3][1].headers["X-CSRF-TOKEN"]).toBe("csrf");
+test("nega erro de permissão sem expor detalhes internos", async () => {
+  mockGetDocs.mockRejectedValue({ code: "permission-denied", message: "internal rule path" });
+  await expect(transactionsApi.list()).rejects.toMatchObject({
+    status: 403, message: expect.not.stringContaining("internal")
+  });
 });

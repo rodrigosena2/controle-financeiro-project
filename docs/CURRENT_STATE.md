@@ -1,4 +1,7 @@
 # Estado atual
+
+> Diagnóstico histórico anterior à migração Firebase. Para o runtime atual, consulte
+> [FIREBASE.md](FIREBASE.md) e [ARCHITECTURE.md](ARCHITECTURE.md).
 > Fotografia histórica do frontend anterior à autenticação. O estado atual está em [AUTHENTICATION.md](AUTHENTICATION.md).
 
 ## Visão geral

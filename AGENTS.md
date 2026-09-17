@@ -19,7 +19,10 @@ Evoluir o Controle Financeiro de forma incremental para uma aplicação full sta
 - Valores monetários futuros devem usar `decimal` no backend, nunca ponto flutuante.
 - O tipo da transação deve ser explícito; não use o sinal do valor para distinguir entrada e saída.
 - Segredos, tokens e connection strings nunca devem ser versionados.
-- Dados privados futuros devem sempre ser filtrados pelo usuário autenticado.
+- Dados Firebase devem ficar sob `users/{uid}` e ser protegidos por regras testadas no emulador.
+- Nunca use o SDK Admin, conta de serviço ou credenciais administrativas no frontend.
+- Valores monetários no Firestore usam centavos inteiros (`amountCents`).
+- A implementação ASP.NET/SQL em `backend/` é histórica; não a remova sem uma etapa explícita.
 - Prefira mudanças pequenas, revisáveis e acompanhadas de documentação.
 
 ## Qualidade obrigatória
@@ -30,6 +33,7 @@ Antes de concluir uma alteração no front-end, execute:
 npm test -- --watchAll=false
 npm run lint
 npm run build
+npm run test:firebase
 ```
 
 Quando houver backend, execute também build e testes da solução .NET. Não declare sucesso se alguma verificação obrigatória falhar; documente claramente o bloqueio.

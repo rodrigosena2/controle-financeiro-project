@@ -1,5 +1,9 @@
 # Integração React e API
 
+> Documento histórico da integração React + ASP.NET Core. O frontend atual usa a camada
+> Firebase descrita em [FIREBASE.md](FIREBASE.md); as rotas `/api`, proxy e CSRF abaixo
+> pertencem à versão anterior preservada no histórico.
+
 ## Fonte oficial dos dados
 
 O SQL Server, acessado exclusivamente pela API, é a fonte oficial das transações.
