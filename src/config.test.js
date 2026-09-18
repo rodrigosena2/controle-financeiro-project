@@ -9,13 +9,39 @@ test("expõe todos os campos públicos esperados", () => {
 });
 
 test("aceita configuração mínima completa", () => {
-  const value = { apiKey: "key", authDomain: "app.firebaseapp.com", projectId: "app", appId: "web" };
+  const value = {
+    apiKey: "AIza-example",
+    authDomain: "app.firebaseapp.com",
+    projectId: "app",
+    appId: "1:123:web:abc"
+  };
   expect(requireFirebaseConfig(value)).toBe(value);
 });
 
 test.each(["apiKey", "authDomain", "projectId", "appId"])
   ("recusa configuração sem %s", field => {
-    const value = { apiKey: "key", authDomain: "app.firebaseapp.com", projectId: "app", appId: "web" };
+    const value = {
+      apiKey: "AIza-example",
+      authDomain: "app.firebaseapp.com",
+      projectId: "app",
+      appId: "1:123:web:abc"
+    };
     value[field] = "";
     expect(() => requireFirebaseConfig(value)).toThrow("Configuração do Firebase incompleta");
   });
+
+test("recusa API key copiada para os demais campos", () => {
+  const value = {
+    apiKey: "AIza-example",
+    authDomain: "AIza-example",
+    projectId: "AIza-example",
+    storageBucket: "AIza-example",
+    messagingSenderId: "AIza-example",
+    appId: "AIza-example",
+    measurementId: "AIza-example"
+  };
+
+  expect(() => requireFirebaseConfig(value)).toThrow(
+    /REACT_APP_FIREBASE_PROJECT_ID.*REACT_APP_FIREBASE_AUTH_DOMAIN.*REACT_APP_FIREBASE_APP_ID/
+  );
+});

@@ -21,11 +21,15 @@ import {
 import { auth, authPersistenceReady, db } from "./firebaseClient";
 
 export class ApiError extends Error {
-  constructor(message, status = 0, kind = "firebase") {
+  constructor(message, status = 0, kind = "firebase", details = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.kind = kind;
+    this.firebaseCode = details.firebaseCode || null;
+    this.operation = details.operation || null;
+    this.path = details.path || null;
+    this.originalMessage = details.originalMessage || null;
   }
 }
 
@@ -81,9 +85,15 @@ function waitForFirebaseReady(promise, message = "Não foi possível conectar ao
   });
 }
 
-function mapFirebaseError(error) {
+function mapFirebaseError(error, context = {}) {
   if (error instanceof ApiError) return error;
   const code = error?.code || "";
+  const details = {
+    firebaseCode: code || null,
+    operation: context.operation || null,
+    path: context.path || null,
+    originalMessage: error?.message || null
+  };
   const authInvalid = new Set([
     "auth/invalid-credential", "auth/invalid-login-credentials", "auth/user-not-found",
     "auth/wrong-password", "auth/user-disabled"
@@ -98,17 +108,49 @@ function mapFirebaseError(error) {
   if (code === "auth/too-many-requests" || code === "resource-exhausted") {
     return new ApiError("Muitas tentativas. Aguarde um minuto e tente novamente.", 429, "limit");
   }
-  if (code === "permission-denied") return new ApiError("Você não tem permissão para realizar esta operação.", 403, "authorization");
+  if (code === "permission-denied") {
+    return new ApiError(
+      "O Firestore recusou o acesso aos seus dados. Confirme se o banco existe e se as regras de segurança foram publicadas.",
+      403,
+      "authorization",
+      details
+    );
+  }
   if (code === "unauthenticated") return new ApiError("Sua sessão expirou. Entre novamente para continuar.", 401, "authentication");
   if (code === "not-found") return new ApiError("Registro não encontrado. Atualize os dados e tente novamente.", 404);
   if (["already-exists", "aborted"].includes(code)) return new ApiError("Os dados foram alterados. Atualize a lista antes de continuar.", 409);
-  if (["invalid-argument", "failed-precondition", "out-of-range"].includes(code)) {
+  if (code === "failed-precondition") {
+    return new ApiError(
+      "O Firestore exige uma configuração ou índice adicional para concluir esta consulta.",
+      409,
+      "configuration",
+      details
+    );
+  }
+  if (["invalid-argument", "out-of-range"].includes(code)) {
     return new ApiError("Confira os dados informados e tente novamente.", 400, "validation");
   }
   if (["auth/network-request-failed", "unavailable", "deadline-exceeded"].includes(code)) {
     return new ApiError("Não foi possível conectar ao Firebase. Verifique sua conexão.", 0, "network");
   }
   return new ApiError("O serviço não conseguiu concluir a solicitação. Tente novamente mais tarde.", 500);
+}
+
+async function firestoreCall(operation, path, uid, callback) {
+  try {
+    return await callback();
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("[Firestore] operação recusada", {
+        operation,
+        path,
+        authUid: uid,
+        firebaseCode: error?.code || null,
+        firebaseMessage: error?.message || null
+      });
+    }
+    throw mapFirebaseError(error, { operation, path });
+  }
 }
 
 async function run(operation) {
@@ -134,7 +176,9 @@ function userResponse(user) {
 async function requireUser() {
   await waitForFirebaseReady(authPersistenceReady);
   if (typeof auth.authStateReady === "function") await waitForFirebaseReady(auth.authStateReady());
-  if (!auth.currentUser) throw new ApiError("Sua sessão expirou. Entre novamente para continuar.", 401, "authentication");
+  if (!auth.currentUser?.uid || typeof auth.currentUser.uid !== "string") {
+    throw new ApiError("Sua sessão expirou. Entre novamente para continuar.", 401, "authentication");
+  }
   return auth.currentUser;
 }
 
@@ -244,13 +288,16 @@ async function materializeDueOccurrences(uid) {
   const previous = materializedAt.get(uid) || 0;
   if (Date.now() - previous < 10000) return;
   const recurrenceCollection = collection(db, "users", uid, "recurrences");
-  const snapshot = await getDocs(recurrenceCollection);
+  const recurrencePath = `users/${uid}/recurrences`;
+  const snapshot = await firestoreCall("recurrences.list", recurrencePath, uid,
+    () => getDocs(recurrenceCollection));
   const through = today();
   let changed = false;
   let backlog = false;
 
   for (const recurrenceSnapshot of snapshot.docs) {
-    const result = await runTransaction(db, async transaction => {
+    const result = await firestoreCall("recurrences.materialize", recurrencePath, uid,
+      () => runTransaction(db, async transaction => {
       const currentSnapshot = await transaction.get(recurrenceSnapshot.ref);
       if (!currentSnapshot.exists()) return { changed: false, backlog: false };
       const recurrence = currentSnapshot.data();
@@ -277,7 +324,7 @@ async function materializeDueOccurrences(uid) {
       }
       transaction.update(recurrenceSnapshot.ref, { nextOccurrenceDate, updatedAt: serverTimestamp() });
       return { changed: true, backlog: nextOccurrenceDate <= through };
-    });
+      }));
     changed ||= result.changed;
     backlog ||= result.backlog;
   }
@@ -296,9 +343,13 @@ async function loadPeriod(uid, from, to) {
   if (from) constraints.push(where("date", ">=", from));
   if (to) constraints.push(where("date", "<=", to));
   constraints.push(orderBy("date", "desc"));
+  const transactionPath = `users/${uid}/transactions`;
+  const recurrencePath = `users/${uid}/recurrences`;
   const [transactionSnapshots, recurrenceSnapshots] = await Promise.all([
-    getDocs(firestoreQuery(collection(db, "users", uid, "transactions"), ...constraints)),
-    getDocs(collection(db, "users", uid, "recurrences"))
+    firestoreCall("transactions.list", transactionPath, uid,
+      () => getDocs(firestoreQuery(collection(db, "users", uid, "transactions"), ...constraints))),
+    firestoreCall("recurrences.list", recurrencePath, uid,
+      () => getDocs(collection(db, "users", uid, "recurrences")))
   ]);
   const recurrenceMap = new Map(recurrenceSnapshots.docs.map(item => [item.id, item.data()]));
   const items = transactionSnapshots.docs.map(item => transactionResponse(item, recurrenceMap));
@@ -314,7 +365,8 @@ function compare(left, right, sortBy) {
 
 async function existingTransaction(uid, id) {
   const reference = doc(db, "users", uid, "transactions", String(id));
-  const snapshot = await getDoc(reference);
+  const path = `users/${uid}/transactions/${String(id)}`;
+  const snapshot = await firestoreCall("transactions.get", path, uid, () => getDoc(reference));
   if (!snapshot.exists()) throw new ApiError("Transação não encontrada.", 404);
   return { reference, snapshot };
 }
@@ -413,7 +465,8 @@ const firebaseTransactionsApi = {
     }
     transactionValue = transactionDocument(user.uid, input, recurrenceRef?.id || null);
     batch.set(transactionRef, transactionValue);
-    await batch.commit();
+    const transactionPath = `users/${user.uid}/transactions/${transactionRef.id}`;
+    await firestoreCall("transactions.create", transactionPath, user.uid, () => batch.commit());
     invalidate(user.uid);
     if (recurrenceRef) materializedAt.delete(user.uid);
     const recurrenceMap = recurrenceRef ? new Map([[recurrenceRef.id, {
@@ -427,36 +480,44 @@ const firebaseTransactionsApi = {
     const user = await requireUser();
     const input = transactionInput(body, false);
     const { reference, snapshot } = await existingTransaction(user.uid, id);
-    await updateDoc(reference, {
-      description: input.description,
-      amountCents: input.amountCents,
-      type: input.type,
-      category: input.category,
-      date: input.date,
-      updatedAt: serverTimestamp()
-    });
+    const transactionPath = `users/${user.uid}/transactions/${String(id)}`;
+    await firestoreCall("transactions.update", transactionPath, user.uid, () => updateDoc(reference, {
+        description: input.description,
+        amountCents: input.amountCents,
+        type: input.type,
+        category: input.category,
+        date: input.date,
+        updatedAt: serverTimestamp()
+      }));
     invalidate(user.uid);
     const recurrenceId = snapshot.data().recurrenceId;
     let recurrenceMap = new Map();
     if (recurrenceId) {
-      const recurrenceSnapshot = await getDoc(doc(db, "users", user.uid, "recurrences", recurrenceId));
+      const recurrencePath = `users/${user.uid}/recurrences/${recurrenceId}`;
+      const recurrenceSnapshot = await firestoreCall("recurrences.get", recurrencePath, user.uid,
+        () => getDoc(doc(db, "users", user.uid, "recurrences", recurrenceId)));
       if (recurrenceSnapshot.exists()) recurrenceMap = new Map([[recurrenceId, recurrenceSnapshot.data()]]);
     }
-    return transactionResponse(await getDoc(reference), recurrenceMap);
+    const updatedSnapshot = await firestoreCall("transactions.get", transactionPath, user.uid,
+      () => getDoc(reference));
+    return transactionResponse(updatedSnapshot, recurrenceMap);
   }),
   remove: id => run(async () => {
     const user = await requireUser();
     const { reference } = await existingTransaction(user.uid, id);
-    await deleteDoc(reference);
+    const transactionPath = `users/${user.uid}/transactions/${String(id)}`;
+    await firestoreCall("transactions.delete", transactionPath, user.uid, () => deleteDoc(reference));
     invalidate(user.uid);
     return null;
   }),
   endRecurrence: id => run(async () => {
     const user = await requireUser();
     const reference = doc(db, "users", user.uid, "recurrences", String(id));
-    const snapshot = await getDoc(reference);
+    const recurrencePath = `users/${user.uid}/recurrences/${String(id)}`;
+    const snapshot = await firestoreCall("recurrences.get", recurrencePath, user.uid, () => getDoc(reference));
     if (!snapshot.exists()) throw new ApiError("Recorrência não encontrada.", 404);
-    await updateDoc(reference, { active: false, updatedAt: serverTimestamp() });
+    await firestoreCall("recurrences.end", recurrencePath, user.uid,
+      () => updateDoc(reference, { active: false, updatedAt: serverTimestamp() }));
     invalidate(user.uid);
     materializedAt.delete(user.uid);
     return null;

@@ -34,6 +34,23 @@ const transaction = userId => ({
 const transactionRef = (database, userId, id = "transaction-a") =>
   doc(database, "users", userId, "transactions", id);
 
+const recurrence = userId => ({
+  userId,
+  description: "Salário",
+  amountCents: 650000,
+  type: "Income",
+  category: "Salary",
+  frequency: "Monthly",
+  startDate: "2026-09-17",
+  nextOccurrenceDate: "2026-10-17",
+  active: true,
+  createdAt: serverTimestamp(),
+  updatedAt: null
+});
+
+const recurrenceRef = (database, userId, id = "recurrence-a") =>
+  doc(database, "users", userId, "recurrences", id);
+
 before(async () => {
   environment = await initializeTestEnvironment({
     projectId,
@@ -97,4 +114,29 @@ test("atualização preserva proprietário, criação e vínculo de recorrência
   }));
   await assertFails(updateDoc(reference, { userId: "user-b", updatedAt: serverTimestamp() }));
   await assertFails(updateDoc(reference, { createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+});
+
+test("User A cria, consulta e encerra sua própria recorrência", async () => {
+  const database = environment.authenticatedContext("user-a").firestore();
+  const reference = recurrenceRef(database, "user-a");
+  await assertSucceeds(setDoc(reference, recurrence("user-a")));
+  await assertSucceeds(getDoc(reference));
+  await assertSucceeds(updateDoc(reference, {
+    active: false,
+    updatedAt: serverTimestamp()
+  }));
+});
+
+test("User B não consulta nem altera recorrência de User A", async () => {
+  await environment.withSecurityRulesDisabled(async context => {
+    await setDoc(recurrenceRef(context.firestore(), "user-a"), recurrence("user-a"));
+  });
+  const databaseB = environment.authenticatedContext("user-b").firestore();
+  const reference = recurrenceRef(databaseB, "user-a");
+  await assertFails(getDoc(reference));
+  await assertFails(updateDoc(reference, {
+    active: false,
+    updatedAt: serverTimestamp()
+  }));
+  await assertFails(deleteDoc(reference));
 });

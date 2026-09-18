@@ -263,6 +263,26 @@ test("edição e exclusão nunca aceitam caminho de outro usuário", async () =>
 test("nega erro de permissão sem expor detalhes internos", async () => {
   mockGetDocs.mockRejectedValue({ code: "permission-denied", message: "internal rule path" });
   await expect(transactionsApi.list()).rejects.toMatchObject({
-    status: 403, message: expect.not.stringContaining("internal")
+    status: 403,
+    kind: "authorization",
+    firebaseCode: "permission-denied",
+    operation: "recurrences.list",
+    path: expect.stringMatching(/^users\/user-\d+\/recurrences$/),
+    originalMessage: "internal rule path",
+    message: expect.not.stringContaining("internal")
+  });
+});
+
+test("diferencia índice ausente de falha de autorização", async () => {
+  mockGetDocs.mockImplementation(async reference => {
+    if (reference.path.endsWith("/recurrences")) return querySnapshot([]);
+    throw Object.assign(new Error("The query requires an index."), { code: "failed-precondition" });
+  });
+  await expect(transactionsApi.list()).rejects.toMatchObject({
+    status: 409,
+    kind: "configuration",
+    firebaseCode: "failed-precondition",
+    operation: "transactions.list",
+    message: expect.stringContaining("índice")
   });
 });
