@@ -66,7 +66,6 @@ export default function App() {
   const [query, setQuery] = useState(initialQuery);
   const queryRef = useRef(query);
   const [checking, setChecking] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -87,15 +86,16 @@ export default function App() {
     generation.current++;
     sessionRef.current = null;
     setSession(null); setRows([]); setCatalog(emptyCatalog); setSummary(emptySummary);
-    setPaging(emptyPage); setDataReady(false); setChecking(false); setRefreshing(false);
+    setPaging(emptyPage); setDataReady(false); setChecking(false);
     setLegacy(""); setSuccess(""); setComposerOpen(false); setError(message);
   }, []);
 
   const refresh = useCallback(async ({ afterWrite = false, queryOverride, background = false } = {}) => {
     const version = ++generation.current;
+    let dataCommitted = false;
     let activeQuery = queryOverride || queryRef.current;
     if (queryOverride) { queryRef.current = queryOverride; setQuery(queryOverride); }
-    if (!background) { setRefreshing(true); setError(""); }
+    if (!background) setError("");
     try {
       const user = await authApi.me();
       if (version !== generation.current) return false;
@@ -115,36 +115,48 @@ export default function App() {
         if (!list || !Array.isArray(list.items) || list.items.some(row => row.userId !== user.id))
           throw new Error("A conta ou a resposta mudou durante a consulta. Atualize os dados.");
       }
-      const [periodSummary, categoryCatalog] = await Promise.all([
-        transactionsApi.summary({ from: activeQuery.from, to: activeQuery.to }),
-        transactionsApi.categories()
-      ]);
+      const categoryCatalog = await transactionsApi.categories();
       if (version !== generation.current) return false;
       if (!categoryCatalog || !Array.isArray(categoryCatalog.income) || !Array.isArray(categoryCatalog.expense))
         throw new Error("O serviço retornou um catálogo de categorias inválido.");
       setCatalog(categoryCatalog);
       setRows(displayRows(list.items, categoryCatalog));
       setPaging({ page: list.page, pageSize: list.pageSize, totalItems: list.totalItems, totalPages: list.totalPages });
-      setSummary(periodSummary);
       setDataReady(true); setLegacy(legacyNotice());
+      dataCommitted = true;
+
+      // The list is usable before the aggregate finishes. This keeps the
+      // composer and existing transactions available on slower connections.
+      const periodSummary = await transactionsApi.summary({ from: activeQuery.from, to: activeQuery.to });
+      if (version !== generation.current) return false;
+      setSummary(periodSummary);
       return true;
     } catch (e) {
       if (version !== generation.current) return false;
-      setSuccess(""); setDataReady(false);
+      setSuccess("");
+      // A background sync must not blank a usable screen when the network is
+      // temporarily slow or unavailable. Keep the last confirmed data visible
+      // and let the next explicit refresh retry the read.
+      if ((!background || afterWrite) && !dataCommitted) setDataReady(false);
       if (e.status === 401) endSession(sessionRef.current ? "Sua sessão expirou. Entre novamente para continuar." : "");
       else if (!background || afterWrite) setError((afterWrite ? "Alteração salva, mas não foi possível atualizar a lista. " : "") + e.message);
       return false;
     } finally {
       if (version === generation.current) {
         setChecking(false);
-        if (!background) setRefreshing(false);
       }
     }
   }, [endSession]);
 
   useEffect(() => {
     const requestGeneration = generation;
-    const checkSession = () => { if (!busyRef.current) refresh(); };
+    const checkSession = () => {
+      if (busyRef.current) return;
+      // Focus and interval checks run in the background. They may refresh the
+      // data, but must never disable the current screen or show a blocking
+      // "Atualizando dados" state.
+      void refresh({ background: Boolean(sessionRef.current) });
+    };
     checkSession();
     window.addEventListener("focus", checkSession);
     const timer = setInterval(checkSession, 60000);
@@ -207,7 +219,7 @@ export default function App() {
     if (!beginAction()) return;
     try { await authApi.logout(); endSession(""); setSuccess("Sessão encerrada."); }
     catch (e) { if (e.status === 401) endSession("Sua sessão já estava encerrada."); else setError("Não foi possível confirmar a saída. " + e.message); }
-    finally { setRefreshing(false); finishAction(); }
+    finally { finishAction(); }
   };
 
   const toggleTheme = () => setTheme(value => value === "dark" ? "light" : "dark");
@@ -215,21 +227,21 @@ export default function App() {
     {error && <Feedback kind="error">{error}</Feedback>}
     {success && <Feedback kind="success">{success}</Feedback>}
     {checking && <Feedback kind="loading">Carregando sessão...</Feedback>}
-    {!checking && (refreshing || busy) && <Feedback kind="loading">{refreshing ? "Atualizando dados..." : "Aguarde..."}</Feedback>}
-    {!checking && error && <div><Button $variant="secondary" type="button" disabled={busy || refreshing} onClick={() => refresh()}>Atualizar dados</Button></div>}
+    {!checking && busy && <Feedback kind="loading">Aguarde...</Feedback>}
+    {!checking && error && <div><Button $variant="secondary" type="button" disabled={busy} onClick={() => refresh()}>Atualizar dados</Button></div>}
   </C.Messages>;
 
   return <>
     <GlobalStyle />
     {session && !checking ? <AppShell user={session} theme={theme} onThemeToggle={toggleTheme}
       onLogout={logout} onNewTransaction={() => setComposerOpen(true)} busy={busy}
-      newTransactionDisabled={busy || refreshing || !dataReady}
+      newTransactionDisabled={busy || !dataReady}
       periodLabel={periodLabel(query)}>
       <C.Main id="main-content" tabIndex={-1}>
         <C.Heading id="overview"><div><Eyebrow>Seu espaço financeiro</Eyebrow>
           <h1>Olá, {session.displayName} <span aria-hidden="true">👋</span></h1>
           <Muted>Aqui está seu panorama financeiro do período.</Muted></div>
-          <C.NewButton><Button type="button" disabled={busy || refreshing || !dataReady}
+          <C.NewButton><Button type="button" disabled={busy || !dataReady}
             onClick={() => setComposerOpen(true)}><FiPlus aria-hidden="true" />Nova transação</Button></C.NewButton>
         </C.Heading>
         {messages}
@@ -238,9 +250,9 @@ export default function App() {
         <Form key={session.id} transactionsList={dataReady ? rows : []} categories={catalog}
           filters={query} paging={paging} panelOpen={composerOpen}
           onPanelOpen={() => setComposerOpen(true)} onPanelClose={() => setComposerOpen(false)}
-          disabled={busy || refreshing || !dataReady} showEmpty={dataReady && !refreshing}
-          onFilters={next => refresh({ queryOverride: { ...next, page: 1 } })}
-          onPage={page => refresh({ queryOverride: { ...queryRef.current, page } })}
+          disabled={busy || !dataReady} showEmpty={dataReady}
+          onFilters={next => refresh({ queryOverride: { ...next, page: 1 }, background: true })}
+          onPage={page => refresh({ queryOverride: { ...queryRef.current, page }, background: true })}
           handleAdd={transaction => mutate(() => transactionsApi.create(requestBody(transaction)), "Transação criada com sucesso.")}
           onUpdate={(id, transaction) => mutate(() => transactionsApi.update(id, requestBody(transaction)), "Transação atualizada com sucesso.")}
           onDelete={id => mutate(() => transactionsApi.remove(id), "Transação excluída com sucesso.")}
@@ -258,7 +270,7 @@ export default function App() {
             <C.IntroPoints><span><FiShield aria-hidden="true" />Dados por usuário</span>
               <span><FiCloud aria-hidden="true" />Persistência segura</span></C.IntroPoints>
           </C.Intro>
-          <C.AuthColumn><AuthForm register={register} busy={busy} refreshing={refreshing} onSubmit={authenticate}
+          <C.AuthColumn><AuthForm register={register} busy={busy} onSubmit={authenticate}
             onToggle={() => { setRegister(!register); setError(""); setSuccess(""); }} /></C.AuthColumn>
         </C.AuthLayout>}
       </C.PublicMain>

@@ -98,6 +98,10 @@ beforeEach(() => {
   mockGetDocs.mockResolvedValue(querySnapshot([]));
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 test("recupera a sessão persistida pelo Firebase", async () => {
   await expect(authApi.me()).resolves.toEqual({
     id: mockAuth.currentUser.uid, email: "a@example.test", displayName: "Conta A"
@@ -208,6 +212,8 @@ test("recorrência mensal usa identificador determinístico e trata fim do mês"
 });
 
 test("materializa ocorrências vencidas uma vez e avança a série em transação atômica", async () => {
+  // Keep the expected occurrences stable as the calendar advances.
+  jest.useFakeTimers().setSystemTime(new Date("2026-09-15T12:00:00Z"));
   const uid = mockAuth.currentUser.uid;
   const recurrence = {
     userId: uid,

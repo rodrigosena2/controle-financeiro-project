@@ -3,7 +3,7 @@ import { FiArrowRight, FiLock } from "react-icons/fi";
 import { AuthCard } from "../App.styles";
 import { Button, Field, Label, Input, Hint, FieldError, Muted } from "../styles/ui";
 
-export default function AuthForm({ register, busy, refreshing, onSubmit, onToggle }) {
+export default function AuthForm({ register, busy, onSubmit, onToggle }) {
   const [errors, setErrors] = useState({});
   const formRef = useRef(null);
   const submit = event => {
@@ -46,7 +46,7 @@ export default function AuthForm({ register, busy, refreshing, onSubmit, onToggl
         {errors.password && <FieldError id="password-error" role="alert">{errors.password}</FieldError>}
         {register && <Hint id="password-hint">Use pelo menos 12 caracteres, incluindo maiúscula, minúscula, número e símbolo.</Hint>}
       </Field>
-      <Button disabled={busy || refreshing} type="submit">
+      <Button disabled={busy} type="submit">
         {busy ? "Aguarde..." : register ? "Cadastrar e entrar" : "Entrar"}<FiArrowRight aria-hidden="true" />
       </Button>
       <Button $variant="secondary" type="button" disabled={busy} onClick={() => { setErrors({}); onToggle(); }}>
