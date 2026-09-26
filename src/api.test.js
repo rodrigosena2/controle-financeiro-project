@@ -247,17 +247,15 @@ test("materializa ocorrências vencidas uma vez e avança a série em transaçã
   }));
 });
 
-test("edição e exclusão nunca aceitam caminho de outro usuário", async () => {
+test("edição e exclusão usam apenas o caminho do usuário autenticado, sem leitura prévia", async () => {
   const uid = mockAuth.currentUser.uid;
-  mockGetDoc.mockImplementation(async reference => documentSnapshot(reference.id,
-    transaction(uid), reference.path));
   await transactionsApi.update("id-from-user-b", {
     description: "Atualizada", amount: 10, type: "Income", category: "Salary", date: "2026-09-17"
   });
   await transactionsApi.remove("id-from-user-b");
-  expect(mockGetDoc).toHaveBeenCalledWith(expect.objectContaining({
-    path: `users/${uid}/transactions/id-from-user-b`
-  }));
+  expect(mockGetDoc).not.toHaveBeenCalled();
+  expect(mockUpdateDoc).toHaveBeenCalledTimes(1);
+  expect(mockDeleteDoc).toHaveBeenCalledTimes(1);
   expect(mockUpdateDoc).toHaveBeenCalledWith(expect.objectContaining({
     path: `users/${uid}/transactions/id-from-user-b`
   }), expect.objectContaining({ amountCents: 1000 }));

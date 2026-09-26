@@ -67,6 +67,7 @@ export default function App() {
   const queryRef = useRef(query);
   const [checking, setChecking] = useState(true);
   const [dataReady, setDataReady] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [register, setRegister] = useState(false);
@@ -86,16 +87,16 @@ export default function App() {
     generation.current++;
     sessionRef.current = null;
     setSession(null); setRows([]); setCatalog(emptyCatalog); setSummary(emptySummary);
-    setPaging(emptyPage); setDataReady(false); setChecking(false);
+    setPaging(emptyPage); setDataReady(false); setLoadFailed(false); setChecking(false);
     setLegacy(""); setSuccess(""); setComposerOpen(false); setError(message);
   }, []);
 
-  const refresh = useCallback(async ({ afterWrite = false, queryOverride, background = false } = {}) => {
+  const refresh = useCallback(async ({ afterWrite = false, queryOverride, background = false, forceRefresh = false } = {}) => {
     const version = ++generation.current;
-    let dataCommitted = false;
     let activeQuery = queryOverride || queryRef.current;
     if (queryOverride) { queryRef.current = queryOverride; setQuery(queryOverride); }
     if (!background) setError("");
+    setLoadFailed(false);
     try {
       const user = await authApi.me();
       if (version !== generation.current) return false;
@@ -103,27 +104,29 @@ export default function App() {
         setRows([]); setDataReady(false); setSuccess("");
       }
       sessionRef.current = user; setSession(user);
-      let list = await transactionsApi.list(activeQuery);
+      const categoryCatalog = await transactionsApi.categories();
+      if (version !== generation.current) return false;
+      if (!categoryCatalog || !Array.isArray(categoryCatalog.income) || !Array.isArray(categoryCatalog.expense))
+        throw new Error("O serviço retornou um catálogo de categorias inválido.");
+      setCatalog(categoryCatalog);
+      // Authentication and the local category catalog are enough to use the
+      // app. Do not keep the whole dashboard behind the Firestore list read.
+      setChecking(false);
+      let list = await transactionsApi.list({ ...activeQuery, forceRefresh });
       if (version !== generation.current) return false;
       if (!list || !Array.isArray(list.items) || list.items.some(row => row.userId !== user.id))
         throw new Error("A conta ou a resposta mudou durante a consulta. Atualize os dados.");
       if (list.totalPages > 0 && list.page > list.totalPages) {
         activeQuery = { ...activeQuery, page: list.totalPages };
         queryRef.current = activeQuery; setQuery(activeQuery);
-        list = await transactionsApi.list(activeQuery);
+        list = await transactionsApi.list({ ...activeQuery, forceRefresh });
         if (version !== generation.current) return false;
         if (!list || !Array.isArray(list.items) || list.items.some(row => row.userId !== user.id))
           throw new Error("A conta ou a resposta mudou durante a consulta. Atualize os dados.");
       }
-      const categoryCatalog = await transactionsApi.categories();
-      if (version !== generation.current) return false;
-      if (!categoryCatalog || !Array.isArray(categoryCatalog.income) || !Array.isArray(categoryCatalog.expense))
-        throw new Error("O serviço retornou um catálogo de categorias inválido.");
-      setCatalog(categoryCatalog);
       setRows(displayRows(list.items, categoryCatalog));
       setPaging({ page: list.page, pageSize: list.pageSize, totalItems: list.totalItems, totalPages: list.totalPages });
-      setDataReady(true); setLegacy(legacyNotice());
-      dataCommitted = true;
+      setDataReady(true); setLoadFailed(false); setLegacy(legacyNotice());
 
       // The list is usable before the aggregate finishes. This keeps the
       // composer and existing transactions available on slower connections.
@@ -134,12 +137,14 @@ export default function App() {
     } catch (e) {
       if (version !== generation.current) return false;
       setSuccess("");
-      // A background sync must not blank a usable screen when the network is
-      // temporarily slow or unavailable. Keep the last confirmed data visible
-      // and let the next explicit refresh retry the read.
-      if ((!background || afterWrite) && !dataCommitted) setDataReady(false);
+      // A failed refresh leaves the previous rows usable. The initial screen
+      // already starts with dataReady=false, so it still cannot show a false
+      // empty state when the first read fails.
       if (e.status === 401) endSession(sessionRef.current ? "Sua sessão expirou. Entre novamente para continuar." : "");
-      else if (!background || afterWrite) setError((afterWrite ? "Alteração salva, mas não foi possível atualizar a lista. " : "") + e.message);
+      else if (!background || afterWrite) {
+        setLoadFailed(true);
+        setError((afterWrite ? "Alteração salva, mas não foi possível atualizar a lista. " : "") + e.message);
+      }
       return false;
     } finally {
       if (version === generation.current) {
@@ -152,15 +157,14 @@ export default function App() {
     const requestGeneration = generation;
     const checkSession = () => {
       if (busyRef.current) return;
-      // Focus and interval checks run in the background. They may refresh the
+      // Focus checks run in the background. They may refresh the
       // data, but must never disable the current screen or show a blocking
       // "Atualizando dados" state.
-      void refresh({ background: Boolean(sessionRef.current) });
+      void refresh({ background: Boolean(sessionRef.current), forceRefresh: Boolean(sessionRef.current) });
     };
     checkSession();
     window.addEventListener("focus", checkSession);
-    const timer = setInterval(checkSession, 60000);
-    return () => { requestGeneration.current++; clearInterval(timer); window.removeEventListener("focus", checkSession); };
+    return () => { requestGeneration.current++; window.removeEventListener("focus", checkSession); };
   }, [refresh]);
 
   const beginAction = () => {
@@ -196,7 +200,7 @@ export default function App() {
   };
 
   const mutate = async (operation, message) => {
-    if (!dataReady || !beginAction()) return false;
+    if (loadFailed || !beginAction()) return false;
     try {
       await operation();
       setSuccess(message);
@@ -209,7 +213,7 @@ export default function App() {
       else {
         const uncertain = !e.status || e.status >= 500 || e.kind === "protocol";
         setError(e.message + (uncertain ? " Não foi possível confirmar a alteração. Atualize a lista antes de tentar novamente." : ""));
-        if (uncertain || e.status === 404) setDataReady(false);
+        if (uncertain || e.status === 404) { setDataReady(false); setLoadFailed(true); }
       }
       return false;
     } finally { finishAction(); }
@@ -228,20 +232,20 @@ export default function App() {
     {success && <Feedback kind="success">{success}</Feedback>}
     {checking && <Feedback kind="loading">Carregando sessão...</Feedback>}
     {!checking && busy && <Feedback kind="loading">Aguarde...</Feedback>}
-    {!checking && error && <div><Button $variant="secondary" type="button" disabled={busy} onClick={() => refresh()}>Atualizar dados</Button></div>}
+    {!checking && error && <div><Button $variant="secondary" type="button" disabled={busy} onClick={() => refresh({ forceRefresh: true })}>Atualizar dados</Button></div>}
   </C.Messages>;
 
   return <>
     <GlobalStyle />
     {session && !checking ? <AppShell user={session} theme={theme} onThemeToggle={toggleTheme}
       onLogout={logout} onNewTransaction={() => setComposerOpen(true)} busy={busy}
-      newTransactionDisabled={busy || !dataReady}
+      newTransactionDisabled={busy || loadFailed}
       periodLabel={periodLabel(query)}>
       <C.Main id="main-content" tabIndex={-1}>
         <C.Heading id="overview"><div><Eyebrow>Seu espaço financeiro</Eyebrow>
           <h1>Olá, {session.displayName} <span aria-hidden="true">👋</span></h1>
           <Muted>Aqui está seu panorama financeiro do período.</Muted></div>
-          <C.NewButton><Button type="button" disabled={busy || !dataReady}
+          <C.NewButton><Button type="button" disabled={busy || loadFailed}
             onClick={() => setComposerOpen(true)}><FiPlus aria-hidden="true" />Nova transação</Button></C.NewButton>
         </C.Heading>
         {messages}
@@ -250,7 +254,7 @@ export default function App() {
         <Form key={session.id} transactionsList={dataReady ? rows : []} categories={catalog}
           filters={query} paging={paging} panelOpen={composerOpen}
           onPanelOpen={() => setComposerOpen(true)} onPanelClose={() => setComposerOpen(false)}
-          disabled={busy || !dataReady} showEmpty={dataReady}
+          disabled={busy || loadFailed} showEmpty={dataReady}
           onFilters={next => refresh({ queryOverride: { ...next, page: 1 }, background: true })}
           onPage={page => refresh({ queryOverride: { ...queryRef.current, page }, background: true })}
           handleAdd={transaction => mutate(() => transactionsApi.create(requestBody(transaction)), "Transação criada com sucesso.")}

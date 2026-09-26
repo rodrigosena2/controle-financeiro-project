@@ -8,7 +8,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
   orderBy,
   query as firestoreQuery,
@@ -59,6 +58,7 @@ const categoryValues = {
 const recurrenceValues = new Set(["Weekly", "Monthly"]);
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const periodCache = new Map();
+const PERIOD_CACHE_TTL_MS = 2 * 60 * 1000;
 const materializedAt = new Map();
 const FIREBASE_READY_TIMEOUT_MS = 10000;
 const FIREBASE_OPERATION_TIMEOUT_MS = 15000;
@@ -249,6 +249,12 @@ function invalidate(uid) {
   for (const key of periodCache.keys()) if (key.startsWith(`${uid}|`)) periodCache.delete(key);
 }
 
+function hasFreshPeriod(uid, from, to) {
+  const cacheKey = `${uid}|${from || ""}|${to || ""}`;
+  const cached = periodCache.get(cacheKey);
+  return Boolean(cached && Date.now() - cached.at < PERIOD_CACHE_TTL_MS);
+}
+
 function transactionResponse(snapshot, recurrenceMap = new Map()) {
   const value = snapshot.data();
   const recurrence = value.recurrenceId ? recurrenceMap.get(value.recurrenceId) : null;
@@ -333,11 +339,11 @@ async function materializeDueOccurrences(uid) {
   if (!backlog) materializedAt.set(uid, Date.now());
 }
 
-async function loadPeriod(uid, from, to) {
+async function loadPeriod(uid, from, to, { forceRefresh = false } = {}) {
   validatePeriod(from, to);
   const cacheKey = `${uid}|${from || ""}|${to || ""}`;
   const cached = periodCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < 5000) return cached.items;
+  if (!forceRefresh && cached && Date.now() - cached.at < PERIOD_CACHE_TTL_MS) return cached.items;
 
   const constraints = [];
   if (from) constraints.push(where("date", ">=", from));
@@ -361,14 +367,6 @@ function compare(left, right, sortBy) {
   if (sortBy === "Amount") return left.amount - right.amount;
   if (sortBy === "Description") return left.description.localeCompare(right.description, "pt-BR", { sensitivity: "base" });
   return left.date.localeCompare(right.date);
-}
-
-async function existingTransaction(uid, id) {
-  const reference = doc(db, "users", uid, "transactions", String(id));
-  const path = `users/${uid}/transactions/${String(id)}`;
-  const snapshot = await firestoreCall("transactions.get", path, uid, () => getDoc(reference));
-  if (!snapshot.exists()) throw new ApiError("Transação não encontrada.", 404);
-  return { reference, snapshot };
 }
 
 const firebaseAuthApi = {
@@ -409,8 +407,9 @@ const firebaseTransactionsApi = {
     if (filters.type && filters.category && !categoryValues[filters.type].has(filters.category)) {
       throw new ApiError("A categoria não é compatível com o tipo informado.", 400, "validation");
     }
-    await materializeDueOccurrences(user.uid);
-    let items = [...await loadPeriod(user.uid, filters.from, filters.to)];
+    if (filters.forceRefresh || !hasFreshPeriod(user.uid, filters.from, filters.to))
+      await materializeDueOccurrences(user.uid);
+    let items = [...await loadPeriod(user.uid, filters.from, filters.to, { forceRefresh: filters.forceRefresh })];
     if (filters.type) items = items.filter(item => item.type === filters.type);
     if (filters.category) items = items.filter(item => item.category === filters.category);
     if (filters.search?.trim()) {
@@ -429,8 +428,9 @@ const firebaseTransactionsApi = {
   }),
   summary: (filters = {}) => run(async () => {
     const user = await requireUser();
-    await materializeDueOccurrences(user.uid);
-    const items = await loadPeriod(user.uid, filters.from, filters.to);
+    if (filters.forceRefresh || !hasFreshPeriod(user.uid, filters.from, filters.to))
+      await materializeDueOccurrences(user.uid);
+    const items = await loadPeriod(user.uid, filters.from, filters.to, { forceRefresh: filters.forceRefresh });
     const incomeCents = items.filter(item => item.type === "Income").reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
     const expenseCents = items.filter(item => item.type === "Expense").reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
     return { from: filters.from || null, to: filters.to || null,
@@ -479,7 +479,7 @@ const firebaseTransactionsApi = {
   update: (id, body) => run(async () => {
     const user = await requireUser();
     const input = transactionInput(body, false);
-    const { reference, snapshot } = await existingTransaction(user.uid, id);
+    const reference = doc(db, "users", user.uid, "transactions", String(id));
     const transactionPath = `users/${user.uid}/transactions/${String(id)}`;
     await firestoreCall("transactions.update", transactionPath, user.uid, () => updateDoc(reference, {
         description: input.description,
@@ -490,21 +490,11 @@ const firebaseTransactionsApi = {
         updatedAt: serverTimestamp()
       }));
     invalidate(user.uid);
-    const recurrenceId = snapshot.data().recurrenceId;
-    let recurrenceMap = new Map();
-    if (recurrenceId) {
-      const recurrencePath = `users/${user.uid}/recurrences/${recurrenceId}`;
-      const recurrenceSnapshot = await firestoreCall("recurrences.get", recurrencePath, user.uid,
-        () => getDoc(doc(db, "users", user.uid, "recurrences", recurrenceId)));
-      if (recurrenceSnapshot.exists()) recurrenceMap = new Map([[recurrenceId, recurrenceSnapshot.data()]]);
-    }
-    const updatedSnapshot = await firestoreCall("transactions.get", transactionPath, user.uid,
-      () => getDoc(reference));
-    return transactionResponse(updatedSnapshot, recurrenceMap);
+    return null;
   }),
   remove: id => run(async () => {
     const user = await requireUser();
-    const { reference } = await existingTransaction(user.uid, id);
+    const reference = doc(db, "users", user.uid, "transactions", String(id));
     const transactionPath = `users/${user.uid}/transactions/${String(id)}`;
     await firestoreCall("transactions.delete", transactionPath, user.uid, () => deleteDoc(reference));
     invalidate(user.uid);
@@ -514,8 +504,6 @@ const firebaseTransactionsApi = {
     const user = await requireUser();
     const reference = doc(db, "users", user.uid, "recurrences", String(id));
     const recurrencePath = `users/${user.uid}/recurrences/${String(id)}`;
-    const snapshot = await firestoreCall("recurrences.get", recurrencePath, user.uid, () => getDoc(reference));
-    if (!snapshot.exists()) throw new ApiError("Recorrência não encontrada.", 404);
     await firestoreCall("recurrences.end", recurrencePath, user.uid,
       () => updateDoc(reference, { active: false, updatedAt: serverTimestamp() }));
     invalidate(user.uid);
